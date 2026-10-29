@@ -1,0 +1,45 @@
+esphome:
+  on_boot:
+    priority: -100
+    then:
+      - lambda: |-
+          id(fd_bus).add_on_frame_received_callback([](const esphome::canbus::CanFrame &frame) {
+            ESP_LOGI("can_test", "RX id=%08" PRIx32 " DLC=%u bytes=%u FDF=%u BRS=%u ESI=%u RTR=%u",
+                     frame.can_id, frame.can_data_length_code,
+                     esphome::canbus::can_dlc_to_len(frame.can_data_length_code),
+                     frame.fd, frame.bit_rate_switch, frame.error_state_indicator,
+                     frame.remote_transmission_request);
+          });
+
+interval:
+  - interval: 5s
+    then:
+      - canbus.send:
+          canbus_id: fd_bus
+          fd: false
+          data: [0, 1, 2, 3, 4, 5, 6, 7]
+      - canbus.send:
+          canbus_id: fd_bus
+          can_id: 0x124
+          bit_rate_switch: false
+          data: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+      - canbus.send:
+          canbus_id: fd_bus
+          can_id: 0x125
+          data: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+      - canbus.send:
+          canbus_id: fd_bus
+          can_id: 0x126
+          pad_data: true
+          data: [0, 1, 2, 3, 4, 5, 6, 7, 8]
+      - lambda: |-
+          esphome::canbus::CanFrame frame{};
+          frame.can_id = 0x1ABCDE;
+          frame.use_extended_id = true;
+          frame.fd = true;
+          frame.bit_rate_switch = true;
+          frame.can_data_length_code = 15;
+          for (uint8_t i = 0; i < sizeof(frame.data); i++) {
+            frame.data[i] = i;
+          }
+          id(fd_bus).send_data(frame);

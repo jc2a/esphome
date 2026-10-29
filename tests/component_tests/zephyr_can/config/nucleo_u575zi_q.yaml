@@ -1,0 +1,40 @@
+esphome:
+  name: nucleo-u575zi-q-can-fd-test
+
+packages:
+  frames: !include fd_frames.yaml
+
+zephyr:
+  variant: STM32U5
+  board: nucleo_u575zi_q
+  overlays:
+    app: |
+      #include <zephyr/dt-bindings/clock/stm32u5_clock.h>
+
+      /* The U575's maximum SYSCLK is 160 MHz. The board also runs PLL1 Q at 160 MHz.
+       * Using it for FDCAN gives integer CAN bit times: 160 clock cycles at
+       * 1 Mbit/s and 20 at 8 Mbit/s, allowing exact rates with integer timing fields.
+       */
+      &fdcan1 {
+        clocks = <&rcc STM32_CLOCK(APB1_2, 9)>,
+                 <&rcc STM32_SRC_PLL1_Q FDCAN1_SEL(1)>;
+      };
+
+logger:
+  level: VERBOSE
+  hardware_uart: "&usart1"
+
+canbus:
+  - platform: zephyr_can
+    id: fd_bus
+    instance: fdcan1
+    rx_pin: PD0
+    tx_pin: PD1
+    can_id: 0x105
+    bit_rate: 500KBPS
+    data_bit_rate: 2000KBPS
+    mode: [FD, LOOPBACK]
+    default_fd: true
+    default_bit_rate_switch: true
+    rx_buffer_size: 16
+    tx_buffer_size: 16

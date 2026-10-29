@@ -1,0 +1,49 @@
+esphome:
+  name: nucleo-g474re-can-fd-test
+
+packages:
+  frames: !include fd_frames.yaml
+
+zephyr:
+  variant: STM32G4
+  board: nucleo_g474re
+  overlays:
+    app: |
+      #include <zephyr/dt-bindings/clock/stm32g4_clock.h>
+
+      /* The G474 supports 170 MHz, but 160 MHz gives integer CAN bit times:
+       * 160 clock cycles at 1 Mbit/s and 20 at 8 Mbit/s. At 170 MHz,
+       * 8 Mbit/s would need 21.25 cycles, which integer timing fields cannot represent.
+       */
+      &pll {
+        mul-n = <80>;
+        div-p = <2>;
+      };
+
+      &rcc {
+        clock-frequency = <DT_FREQ_M(160)>;
+      };
+
+      &fdcan1 {
+        clocks = <&rcc STM32_CLOCK(APB1, 25)>,
+                 <&rcc STM32_SRC_PCLK FDCAN_SEL(2)>;
+      };
+
+logger:
+  level: VERBOSE
+  hardware_uart: "&lpuart1"
+
+canbus:
+  - platform: zephyr_can
+    id: fd_bus
+    instance: fdcan1
+    rx_pin: PA11
+    tx_pin: PA12
+    can_id: 0x604
+    bit_rate: 500KBPS
+    data_bit_rate: 2000KBPS
+    mode: FD
+    default_fd: true
+    default_bit_rate_switch: true
+    rx_buffer_size: 16
+    tx_buffer_size: 16

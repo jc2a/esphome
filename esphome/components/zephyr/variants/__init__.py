@@ -628,6 +628,7 @@ _VARIANT_MODULES = [
     "efr32bg27",
     "stm32l4",
     "stm32f4",
+    "stm32g4",
     "stm32wb55",
     "stm32f1",
     "stm32u5",

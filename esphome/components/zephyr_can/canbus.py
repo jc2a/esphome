@@ -46,13 +46,11 @@ DEPENDENCIES = ["zephyr"]
 CONF_DATA_BIT_RATE = "data_bit_rate"
 CONF_INSTANCE = "instance"
 
-# Only STM32 has its CAN pinctrl and overlay shape wired up here; other Zephyr targets
-# spell their controller and pin routing differently (e.g. Espressif's TWAI).
-SUPPORTED_FAMILIES = ("stm32",)
+# Other families use board pin routing or a user-supplied devicetree overlay.
+PIN_ROUTING_FAMILIES = ("stm32",)
 
-# Devicetree node labels of CAN controllers: bxCAN parts (STM32F0/F1/F3/F4/L4) label
-# theirs can1/can2, FDCAN parts (STM32U5/C0) fdcan1.
-_INSTANCE_RE = re.compile(r"(fd)?can\d+")
+# External controllers may use arbitrary devicetree node labels.
+_INSTANCE_RE = re.compile(r"[a-z_][a-z0-9_]*")
 
 zephyr_can_ns = cg.esphome_ns.namespace("zephyr_can")
 ZephyrCan = zephyr_can_ns.class_("ZephyrCan", CanbusComponent)
@@ -70,22 +68,29 @@ def _validate_instance(value: str) -> str:
     if not _INSTANCE_RE.fullmatch(value):
         raise cv.Invalid(
             f"'{value}' is not a CAN controller devicetree node label, "
-            "e.g. 'fdcan1' or 'can1'"
+            "e.g. 'fdcan1', 'can1' or 'mcp2518fd'"
         )
     return value
 
 
 def _validate(config: ConfigType) -> ConfigType:
-    if not CORE.using_zephyr or zephyr_variant_family() not in SUPPORTED_FAMILIES:
-        raise cv.Invalid(
-            "zephyr_can is only available on Zephyr variants of the "
-            f"{', '.join(SUPPORTED_FAMILIES)} family"
-        )
+    if not CORE.using_zephyr:
+        raise cv.Invalid("zephyr_can is only available on Zephyr")
     if (CONF_TX_PIN in config) != (CONF_RX_PIN in config):
         raise cv.Invalid(
             f"'{CONF_TX_PIN}' and '{CONF_RX_PIN}' must be given together; leave both "
             "out to use the pins the board's devicetree already assigns"
         )
+    if zephyr_variant_family() not in PIN_ROUTING_FAMILIES:
+        if CONF_INSTANCE not in config:
+            raise cv.Invalid(
+                "Set 'instance' to the CAN controller's devicetree node label"
+            )
+        if CONF_TX_PIN in config:
+            raise cv.Invalid(
+                "tx_pin/rx_pin routing is only supported on STM32; configure the "
+                "controller and its pins with 'zephyr: overlays:'"
+            )
     modes = config[CONF_MODE]
     fd = "FD" in modes
     config.setdefault(CONF_DEFAULT_FD, fd)
@@ -173,8 +178,9 @@ async def to_code(config: ConfigType) -> None:
         zephyr_add_prj_conf("CAN_FD_MODE", True)
 
     board = zephyr_data()[KEY_BOARD]
+    known_instance = True
     if explicit_instance := config.get(CONF_INSTANCE):
-        validate_dts_label_exists("can", board, explicit_instance)
+        known_instance = validate_dts_label_exists("can", board, explicit_instance)
         instance = explicit_instance
     else:
         instance = _resolve_instance(board)
@@ -210,6 +216,10 @@ async def to_code(config: ConfigType) -> None:
     # STM32U5's FDCAN, which only gets its bus clock from the SoC dtsi) needs a `clocks`
     # property too -- add that from `zephyr: overlays: app:`, which is applied after
     # component overlays and therefore wins.
+    # User overlays declare external controllers after component overlays. Avoid a
+    # forward reference to a label that does not exist in the board's devicetree.
+    if not known_instance:
+        return
     overlay = [f"&{instance} {{", '  status = "okay";']
     if (tx_pin := config.get(CONF_TX_PIN)) is not None:
         rx_pin = config[CONF_RX_PIN]

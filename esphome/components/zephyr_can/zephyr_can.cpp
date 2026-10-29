@@ -34,16 +34,6 @@ static const char *can_state_str(can_state state) {
   }
 }
 
-static const char *can_mode_str(can_mode_t mode) {
-  if ((mode & CAN_MODE_LOOPBACK) != 0) {
-    return "loopback";
-  }
-  if ((mode & CAN_MODE_LISTENONLY) != 0) {
-    return "listen only";
-  }
-  return "normal";
-}
-
 bool ZephyrCan::setup_internal() {
   if (!device_is_ready(this->can_dev_)) {
     ESP_LOGE(TAG, "CAN device is not ready");
@@ -69,6 +59,16 @@ bool ZephyrCan::setup_internal() {
     ESP_LOGE(TAG, "can't set mode [%d]", err);
     return false;
   }
+
+#ifdef CONFIG_CAN_FD_MODE
+  if (this->supports_fd()) {
+    err = can_set_bitrate_data(this->can_dev_, this->data_bitrate_);
+    if (err != 0) {
+      ESP_LOGE(TAG, "can't set data bitrate to %" PRIu32 " bit/s [%d]", this->data_bitrate_, err);
+      return false;
+    }
+  }
+#endif
 
   // Standard and extended identifiers need one filter each -- a filter without
   // CAN_FILTER_IDE only ever matches standard frames.
@@ -112,15 +112,19 @@ void ZephyrCan::dump_config() {
     tx_buffer_size = this->tx_queue_->max_msgs;
   }
 #endif
-  ESP_LOGCONFIG(TAG,
-                "Zephyr CAN:\n"
-                "  Device: %s\n"
-                "  Bit rate: %" PRIu32 " bit/s\n"
-                "  Mode: %s\n"
-                "  RX buffer size: %" PRIu32 "\n"
-                "  TX buffer size: %" PRIu32,
-                this->can_dev_->name, this->bitrate_, can_mode_str(this->mode_), this->rx_queue_->max_msgs,
-                tx_buffer_size);
+  ESP_LOGCONFIG(TAG, "Zephyr CAN:");
+  ESP_LOGCONFIG(TAG, "  Device: %s", this->can_dev_->name);
+  ESP_LOGCONFIG(TAG, "  Mode: %s%s%s",
+                (this->mode_ & CAN_MODE_FD) != 0 ? LOG_STR_LITERAL("FD") : LOG_STR_LITERAL("NORMAL"),
+                (this->mode_ & CAN_MODE_LOOPBACK) != 0 ? LOG_STR_LITERAL(" | LOOPBACK") : LOG_STR_LITERAL(""),
+                (this->mode_ & CAN_MODE_LISTENONLY) != 0 ? LOG_STR_LITERAL(" | LISTENONLY") : LOG_STR_LITERAL(""));
+  ESP_LOGCONFIG(TAG, "  CAN FD: %s", YESNO(this->supports_fd()));
+  ESP_LOGCONFIG(TAG, "  Bit rate: %" PRIu32 " bit/s", this->bitrate_);
+  if (this->supports_fd()) {
+    ESP_LOGCONFIG(TAG, "  Data bit rate: %" PRIu32 " bit/s", this->data_bitrate_);
+  }
+  ESP_LOGCONFIG(TAG, "  RX buffer size: %" PRIu32, this->rx_queue_->max_msgs);
+  ESP_LOGCONFIG(TAG, "  TX buffer size: %" PRIu32, tx_buffer_size);
   canbus::Canbus::dump_config();
 }
 
@@ -177,10 +181,12 @@ canbus::Error ZephyrCan::send_message(struct canbus::CanFrame *frame) {
       .id = frame->can_id,
       .dlc = frame->can_data_length_code,
       .flags = static_cast<uint8_t>((frame->use_extended_id ? CAN_FRAME_IDE : 0) |
-                                    (frame->remote_transmission_request ? CAN_FRAME_RTR : 0)),
+                                    (frame->remote_transmission_request ? CAN_FRAME_RTR : 0) |
+                                    (frame->fd ? CAN_FRAME_FDF : 0) | (frame->bit_rate_switch ? CAN_FRAME_BRS : 0)),
   };
-  if (frame->can_data_length_code != 0) {
-    memcpy(tx_frame.data, frame->data, frame->can_data_length_code);
+  // ESI on transmit is determined by the controller's error state.
+  if (!frame->remote_transmission_request) {
+    memcpy(tx_frame.data, frame->data, canbus::can_dlc_to_len(frame->can_data_length_code));
   }
 #ifdef USE_ZEPHYR_CAN_TX_QUEUE
   if (this->tx_queue_ != nullptr) {
@@ -250,12 +256,25 @@ canbus::Error ZephyrCan::read_message(struct canbus::CanFrame *frame) {
   if (k_msgq_get(this->rx_queue_, &rx_frame, K_NO_WAIT) != 0) {
     return canbus::ERROR_NOMSG;
   }
-  const uint8_t length = std::min<uint8_t>(rx_frame.dlc, canbus::CAN_MAX_DATA_LENGTH);
+  const bool fd = (rx_frame.flags & CAN_FRAME_FDF) != 0;
+  uint8_t length = canbus::can_dlc_to_len(rx_frame.dlc);
+  if (length == canbus::CAN_INVALID_DLC) {
+    return canbus::ERROR_FAIL;
+  }
+  if (!fd) {
+    length = std::min(length, canbus::CAN_MAX_DATA_LENGTH);
+  }
+  if (length > sizeof(rx_frame.data)) {
+    return canbus::ERROR_FAIL;
+  }
   frame->can_id = rx_frame.id;
-  frame->can_data_length_code = length;
+  frame->can_data_length_code = rx_frame.dlc;
   frame->use_extended_id = (rx_frame.flags & CAN_FRAME_IDE) != 0;
   frame->remote_transmission_request = (rx_frame.flags & CAN_FRAME_RTR) != 0;
-  if (length != 0) {
+  frame->fd = fd;
+  frame->bit_rate_switch = (rx_frame.flags & CAN_FRAME_BRS) != 0;
+  frame->error_state_indicator = (rx_frame.flags & CAN_FRAME_ESI) != 0;
+  if (!frame->remote_transmission_request && length != 0) {
     memcpy(frame->data, rx_frame.data, length);
   }
   return canbus::ERROR_OK;

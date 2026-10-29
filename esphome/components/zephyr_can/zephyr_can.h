@@ -14,8 +14,17 @@ namespace esphome::zephyr_can {
 
 class ZephyrCan : public canbus::Canbus {
  public:
-  ZephyrCan(const struct device *can_dev, struct k_msgq *rx_queue, uint32_t bitrate, can_mode_t mode)
-      : can_dev_(can_dev), rx_queue_(rx_queue), bitrate_(bitrate), mode_(mode) {}
+  ZephyrCan(const struct device *can_dev, struct k_msgq *rx_queue, can_mode_t mode, uint32_t bitrate,
+            uint32_t data_bitrate = 0)
+      : can_dev_(can_dev), rx_queue_(rx_queue), mode_(mode), bitrate_(bitrate), data_bitrate_(data_bitrate) {}
+
+  bool supports_fd() const override {
+#ifdef CONFIG_CAN_FD_MODE
+    return (this->mode_ & CAN_MODE_FD) != 0;
+#else
+    return false;
+#endif
+  }
 
 #ifdef USE_ZEPHYR_CAN_TX_QUEUE
   void set_tx_queue(struct k_msgq *tx_queue) { this->tx_queue_ = tx_queue; }
@@ -59,8 +68,9 @@ class ZephyrCan : public canbus::Canbus {
   atomic_t tx_errors_{ATOMIC_INIT(0)};
   atomic_t tx_last_error_{ATOMIC_INIT(0)};
   atomic_val_t reported_tx_errors_{0};
-  uint32_t bitrate_;
   can_mode_t mode_;
+  uint32_t bitrate_;
+  uint32_t data_bitrate_;
   uint32_t last_state_check_{0};
   can_state last_state_{CAN_STATE_STOPPED};
   can_bus_err_cnt last_err_cnt_{0, 0};

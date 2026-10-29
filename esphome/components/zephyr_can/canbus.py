@@ -4,8 +4,11 @@ import re
 from esphome import pins
 import esphome.codegen as cg
 from esphome.components.canbus import (
+    CAN_DATA_SPEEDS,
     CANBUS_SCHEMA,
     CONF_BIT_RATE,
+    CONF_DEFAULT_BIT_RATE_SWITCH,
+    CONF_DEFAULT_FD,
     CanbusComponent,
     get_rate,
     register_canbus,
@@ -40,6 +43,7 @@ _LOGGER = logging.getLogger(__name__)
 
 DEPENDENCIES = ["zephyr"]
 
+CONF_DATA_BIT_RATE = "data_bit_rate"
 CONF_INSTANCE = "instance"
 
 # Only STM32 has its CAN pinctrl and overlay shape wired up here; other Zephyr targets
@@ -57,6 +61,7 @@ CAN_MODES = {
     "NORMAL": cg.RawExpression("CAN_MODE_NORMAL"),
     "LISTENONLY": cg.RawExpression("CAN_MODE_LISTENONLY"),
     "LOOPBACK": cg.RawExpression("CAN_MODE_LOOPBACK"),
+    "FD": cg.RawExpression("CAN_MODE_FD"),
 }
 
 
@@ -81,6 +86,19 @@ def _validate(config: ConfigType) -> ConfigType:
             f"'{CONF_TX_PIN}' and '{CONF_RX_PIN}' must be given together; leave both "
             "out to use the pins the board's devicetree already assigns"
         )
+    modes = config[CONF_MODE]
+    fd = "FD" in modes
+    config.setdefault(CONF_DEFAULT_FD, fd)
+    if fd:
+        if CONF_DATA_BIT_RATE not in config:
+            raise cv.Invalid("CAN FD requires 'data_bit_rate'")
+    else:
+        if CONF_DATA_BIT_RATE in config:
+            raise cv.Invalid("data_bit_rate requires FD mode")
+        if config[CONF_DEFAULT_FD]:
+            raise cv.Invalid("default_fd requires FD mode")
+    if config[CONF_DEFAULT_BIT_RATE_SWITCH] and not config[CONF_DEFAULT_FD]:
+        raise cv.Invalid("default_bit_rate_switch requires default_fd: true")
     return config
 
 
@@ -93,7 +111,12 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_RX_PIN): pins.internal_gpio_input_pin_number,
             cv.Optional(CONF_RX_BUFFER_SIZE, default=8): cv.int_range(min=1, max=64),
             cv.Optional(CONF_TX_BUFFER_SIZE, default=16): cv.int_range(min=0, max=64),
-            cv.Optional(CONF_MODE, default="NORMAL"): cv.enum(CAN_MODES, upper=True),
+            cv.Optional(CONF_MODE, default="NORMAL"): cv.All(
+                cv.ensure_list(cv.enum(CAN_MODES, upper=True)), cv.Length(min=1)
+            ),
+            cv.Optional(CONF_DATA_BIT_RATE): cv.enum(CAN_DATA_SPEEDS, upper=True),
+            cv.Optional(CONF_DEFAULT_FD): cv.boolean,
+            cv.Optional(CONF_DEFAULT_BIT_RATE_SWITCH, default=False): cv.boolean,
         }
     ),
     _validate,
@@ -145,6 +168,9 @@ async def to_code(config: ConfigType) -> None:
     # Without this Zephyr rejects remote transmission request frames in the driver, so
     # they would never reach an on_frame trigger.
     zephyr_add_prj_conf("CAN_ACCEPT_RTR", True)
+    fd = "FD" in config[CONF_MODE]
+    if fd:
+        zephyr_add_prj_conf("CAN_FD_MODE", True)
 
     board = zephyr_data()[KEY_BOARD]
     if explicit_instance := config.get(CONF_INSTANCE):
@@ -161,8 +187,11 @@ async def to_code(config: ConfigType) -> None:
         config[CONF_ID],
         cg.RawExpression(f"DEVICE_DT_GET(DT_NODELABEL({instance}))"),
         cg.RawExpression(f"&{rx_queue}"),
+        cg.RawExpression(
+            " | ".join(str(CAN_MODES[mode]) for mode in config[CONF_MODE])
+        ),
         get_rate(config[CONF_BIT_RATE]),
-        config[CONF_MODE],
+        get_rate(config[CONF_DATA_BIT_RATE]) if fd else 0,
     )
     await register_canbus(var, config)
 

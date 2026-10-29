@@ -22,7 +22,7 @@
 // platform (see esphome/components/<platform>/__init__.py ThreadModel.*):
 //   USE_ESP8266 / USE_RP2 / USE_NRF52 / USE_ZEPHYR → SINGLE
 //   USE_BK72XX (ARMv5TE, no LDREX/STREX) → MULTI_NO_ATOMICS
-//   everything else (ESP32, host, RTL87XX, LN882X) → MULTI_ATOMICS
+//   everything else (ESP32, host, RTL87XX, LN882X, USE_NRF52) → MULTI_ATOMICS
 // Without this the clang-tidy envs end up with USE_<single-threaded platform>
 // + MULTI_ATOMICS simultaneously, a combination that can never occur in a
 // real build.
@@ -71,6 +71,7 @@
 #define USE_BINARY_SENSOR_CLICK_TRIGGER
 #define USE_BINARY_SENSOR_FILTER
 #define USE_BINARY_SENSOR_MULTI_CLICK_TRIGGER
+#define USE_BINARY_SENSOR_RAW_CALLBACK
 #define USE_BLE_DEVICE_IRK
 #define USE_BMI270_BMM150
 #define USE_BQ25186_PG_GPO
@@ -562,6 +563,7 @@
 #define USE_SENDSPIN_ENABLED_SWITCH
 #define USE_SENDSPIN_METADATA
 #define USE_SENDSPIN_PLAYER
+#define USE_SENDSPIN_SOURCE
 #define USE_SENDSPIN_SWITCH
 #define USE_SENDSPIN_VISUALIZER
 #define USE_SENDSPIN_PORT 8928  // NOLINT

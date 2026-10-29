@@ -1,0 +1,2 @@
+packages:
+  zephyr_can: !include ../../component_tests/zephyr_can/config/esp32_mcp251xfd.yaml

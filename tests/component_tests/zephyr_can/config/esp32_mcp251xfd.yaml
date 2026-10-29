@@ -1,0 +1,69 @@
+esphome:
+  name: mcp251xfd-test
+
+packages:
+  frames: !include fd_frames.yaml
+
+zephyr:
+  variant: ESP32
+  board: esp32_devkitc/esp32/procpu
+  overlays:
+    app: |
+      #include <zephyr/dt-bindings/gpio/gpio.h>
+      #include <zephyr/dt-bindings/pinctrl/esp32-pinctrl.h>
+
+      &flash0 {
+        reg = <0x0 DT_SIZE_M(8)>;
+        ranges = <0x0 0x0 DT_SIZE_M(8)>;
+      };
+
+      &spi2 {
+        status = "disabled";
+      };
+
+      &pinctrl {
+        can_spi_default: can_spi_default {
+          group1 {
+            pinmux = <SPIM3_SCLK_GPIO18>, <SPIM3_MISO_GPIO34>;
+          };
+          group2 {
+            pinmux = <SPIM3_MOSI_GPIO4>;
+            output-low;
+          };
+        };
+      };
+
+      &spi3 {
+        status = "okay";
+        pinctrl-0 = <&can_spi_default>;
+        pinctrl-names = "default";
+        cs-gpios = <&gpio0 5 GPIO_ACTIVE_LOW>;
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        mcp2518fd: can@0 {
+          compatible = "microchip,mcp251xfd";
+          status = "okay";
+          reg = <0>;
+          spi-max-frequency = <16000000>;
+          int-gpios = <&gpio1 4 GPIO_ACTIVE_LOW>;
+          osc-freq = <40000000>;
+        };
+      };
+
+logger:
+  level: VERBOSE
+  hardware_uart: "&uart0"
+
+canbus:
+  - platform: zephyr_can
+    id: fd_bus
+    instance: mcp2518fd
+    can_id: 0x732
+    bit_rate: 500KBPS
+    data_bit_rate: 2000KBPS
+    mode: FD
+    default_fd: true
+    default_bit_rate_switch: true
+    rx_buffer_size: 16
+    tx_buffer_size: 16
